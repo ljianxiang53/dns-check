@@ -1,0 +1,71 @@
+name: 8D2K Independent DNS Evidence
+on:
+  workflow_dispatch:
+permissions: {}
+jobs:
+  dns-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Install dnsutils only
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends dnsutils
+      - name: Runner network context
+        run: |
+          date -u
+          cat /etc/resolv.conf
+          ip route
+      - name: Recursive, trace, authoritative and TCP evidence
+        shell: bash
+        run: |
+          set -uo pipefail
+          evidence_dir=$(mktemp -d)
+          lookup() {
+            echo "QUERY: dig $*"
+            dig +time=5 +tries=1 +comments +answer +authority +additional +stats "$@" || echo "DNS_COMMAND_FAILED=$?"
+          }
+          for rr in A AAAA CNAME; do
+            lookup api.apimart.ai "$rr"
+          done
+          for resolver in 1.1.1.1 8.8.8.8 9.9.9.9; do
+            for rr in A AAAA CNAME; do
+              lookup "@$resolver" api.apimart.ai "$rr"
+            done
+          done
+          echo TRACE_APIMART_NS_BEGIN
+          dig +trace +time=5 +tries=1 apimart.ai NS 2>&1 | tee "$evidence_dir/apimart-ns.trace"
+          echo "TRACE_APIMART_EXIT=${PIPESTATUS[0]}"
+          echo TRACE_APIMART_NS_END
+          echo TRACE_API_A_BEGIN
+          dig +trace +time=5 +tries=1 api.apimart.ai A 2>&1 | tee "$evidence_dir/api-a.trace"
+          echo "TRACE_API_EXIT=${PIPESTATUS[0]}"
+          echo TRACE_API_A_END
+          echo AI_TLD_NS_FROM_TRACE
+          awk '$1 == "ai." && $4 == "NS" {print $5}' "$evidence_dir/apimart-ns.trace" | sort -u
+          mapfile -t zone_ns < <(awk '$1 == "apimart.ai." && $4 == "NS" {print $5}' "$evidence_dir/apimart-ns.trace" | sort -u)
+          mapfile -t api_ns < <(awk '$1 == "api.apimart.ai." && $4 == "NS" {print $5}' "$evidence_dir/api-a.trace" | sort -u)
+          echo APIMART_AUTHORITATIVE_NS_FROM_TRACE
+          for ns in "${zone_ns[@]}"; do echo "$ns"; done
+          echo API_NS_FROM_TRACE
+          for ns in "${api_ns[@]}"; do echo "$ns"; done
+          if [ "${#zone_ns[@]}" -eq 0 ]; then
+            echo AUTHORITATIVE_NS_NOT_OBTAINED=YES
+          fi
+          for ns in "${zone_ns[@]}" "${api_ns[@]}"; do
+            [ -n "$ns" ] || continue
+            echo "AUTHORITATIVE_SERVER=$ns"
+            lookup "@$ns" apimart.ai SOA +norecurse
+            lookup "@$ns" apimart.ai NS +norecurse
+            lookup "@$ns" api.apimart.ai NS +norecurse
+            for rr in A AAAA CNAME; do
+              lookup "@$ns" api.apimart.ai "$rr" +norecurse
+            done
+            lookup +tcp "@$ns" api.apimart.ai A +norecurse
+          done
+          lookup +tcp @1.1.1.1 api.apimart.ai A
+          lookup +tcp @8.8.8.8 api.apimart.ai A
+          echo REAL_APIMART_REQUEST_COUNT=0
+          echo REAL_SUBMIT_COUNT=0
+          echo APIMART_KEY_READ_COUNT=0
+          echo APIMART_GENERATION_REQUEST_COUNT=0
