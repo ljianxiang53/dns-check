@@ -1,0 +1,35 @@
+name: Wave2 immutable media fixture verification
+on:
+  workflow_dispatch:
+    inputs:
+      fixture_commit:
+        description: Exact commit containing the three approved fixtures
+        required: true
+        type: string
+permissions: {}
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    env:
+      FIXTURE_COMMIT: ${{ inputs.fixture_commit }}
+    steps:
+      - name: Verify immutable HTTPS bytes without credentials
+        run: |
+          set -euo pipefail
+          [[ "$FIXTURE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          date -u
+          for asset in reference.mp4 reference.wav last-frame.png; do
+            url="https://raw.githubusercontent.com/ljianxiang53/dns-check/$FIXTURE_COMMIT/$asset"
+            metadata=$(curl --fail --silent --show-error --retry 0 --connect-timeout 15 --max-time 45 --proto '=https' --tlsv1.2 -o "$asset" --write-out '%{http_code} %{content_type}' "$url")
+            [[ "$metadata" == 200\ * ]]
+            printf 'PUBLIC_URL=%s HTTP_METADATA=%s\n' "$url" "$metadata"
+            file --mime-type "$asset"
+          done
+          printf '%s\n' 'cd6c6243f7eed1ea7423dd84159b0c580d6da7f83fd67870da6a6f22511406c7  reference.mp4' 'b0b1abbecd5c0bcf004b40b8e8ddea2f1300cd5166a34a2093130f52f1b354b7  reference.wav' 'a921b726206264757a60e3f557c6fb779cc0591057e09528deea67ae9ce003ef  last-frame.png' | sha256sum --check --strict
+          sha256sum reference.mp4 reference.wav last-frame.png
+          [[ "$(file --brief --mime-type reference.mp4)" == video/mp4 ]]
+          [[ "$(file --brief --mime-type reference.wav)" == audio/x-wav ]]
+          [[ "$(file --brief --mime-type last-frame.png)" == image/png ]]
+          python3 -c 'import pathlib,struct,wave; p=pathlib.Path("last-frame.png").read_bytes(); assert p[:8]==bytes([137,80,78,71,13,10,26,10]); assert struct.unpack(">II",p[16:24])==(512,512); w=wave.open("reference.wav"); assert (w.getnchannels(),w.getsampwidth(),w.getframerate(),w.getnframes())==(1,2,48000,96000); assert len(w.readframes(96000))==192000; b=pathlib.Path("reference.mp4").read_bytes(); assert b[4:8]==b"ftyp" and b"avc1" in b and b"moov" in b and b"trak" in b; print("FILE_FORMATS=PASS PNG=512x512 WAV=PCM16_MONO_48KHZ_2S MP4=H264_ISO_MEDIA")'
+          printf 'INDEPENDENT_FIXTURE_VERIFICATION=PASS FIXTURE_COMMIT_PINNED=YES TLS_VALIDATED=YES REMOTE_FIXTURE_SHA_MATCH=YES REAL_APIMART_REQUEST_COUNT=0 REAL_SUBMIT_COUNT=0 APIMART_KEY_READ_COUNT=0\n'
