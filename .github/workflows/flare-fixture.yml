@@ -1,0 +1,18 @@
+name: Flare I2I public fixture verification
+on:
+  push:
+    paths: ['.github/workflows/flare-fixture.yml']
+  workflow_dispatch:
+permissions: {}
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Fetch exact commit fixture without credentials
+        run: |
+          set -eu
+          curl --fail --silent --show-error --retry 0 --connect-timeout 15 --max-time 45 --proto '=https' --tlsv1.2 -o reference.png 'https://raw.githubusercontent.com/ljianxiang53/dns-check/e80f123eeab8ea03ef6d614a149a2007a6b4361b/flare-reference.png'
+          echo '9e1bc46cefeeaa9b6e02f55e83a1cf41d246eb0d4c3aad4fe498d4fa31f02e99  reference.png' | sha256sum --check --strict
+          python3 -c "import pathlib,struct; b=pathlib.Path('reference.png').read_bytes(); assert b[:8]==bytes([137,80,78,71,13,10,26,10]); assert struct.unpack('>II', b[16:24])==(256,256)"
+          echo 'INDEPENDENT_NETWORK=GITHUB_UBUNTU_RUNNER PUBLIC_FIXTURE_URL_READY=YES FIXTURE_SHA_BINDING=PASS PNG_DIMENSIONS=256x256 TLS_VALIDATED=YES APIMART_REQUEST_COUNT=0'
